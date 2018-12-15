@@ -2,16 +2,15 @@
 clear
 close all
 % import the dicom files
-addpath CTBrainDicom
+%addpath CTBrainDicom
 addpath Patient6-4231278
-%addpath SphericalHough
 addpath nrrd
 
 
 
 %% Hough transform in 3D
 
-[ct_data, ct_metadata] = nrrdread('CT_cadaver_sample.nrrd');
+[ct_data, ct_metadata] = nrrdread('4 Gap Corrected BRAIN Head 3.000  BRAINAxial Axial MPR FC64.nrrd');
 save('ct_data.mat','ct_data','ct_metadata');
 %{
 filename = 'ct_data.mat';
