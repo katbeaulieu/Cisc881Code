@@ -1,0 +1,720 @@
+% set up gradient operator in 3d
+clear
+close all
+% import the dicom files
+addpath CTBrainDicom
+addpath Patient6-4231278
+%addpath SphericalHough
+addpath nrrd
+
+
+
+%% Hough transform in 3D
+
+[ct_data, ct_metadata] = nrrdread('CT_cadaver_sample.nrrd');
+save('ct_data.mat','ct_data','ct_metadata');
+%{
+filename = 'ct_data.mat';
+myVars = {'ct_data','ct_metadata'};
+S = load(filename,myVars{:});
+ct_data = S.ct_data;
+ct_metadata = S.ct_metadata;
+%}
+ct_data = double(ct_data);
+X_one_col = reshape(ct_data, [size(ct_data,1)*size(ct_data,2)*size(ct_data,3),1]);
+max_intensity = max(X_one_col);
+high_intensity_indices = find(abs(ct_data) > (max_intensity-40));
+ct_data(high_intensity_indices) = 0.00000000001;
+
+figure;
+ct_data_wide = reshape(ct_data, size(ct_data,1), size(ct_data,2), 1, size(ct_data,3));
+montage(ct_data_wide,[])
+
+%get edges of 2D image
+thresh= 0.7;
+slice_edges = edge3(ct_data,'approxcanny',thresh);
+
+%reshape edges to plot montage
+reshaped_edges = reshape(slice_edges, size(slice_edges,1), size(slice_edges,2), 1, size(slice_edges,3));
+figure;
+imshow(slice_edges(:,:,20));
+%montage(reshaped_edges,[])
+
+[r,c,v] = ind2sub(size(slice_edges),find(slice_edges == 1));
+
+%calculate the gradients
+[gmag,gaz,gelev] = imgradient3(ct_data);
+[gx,gy,gz] = imgradientxyz(ct_data);
+
+figure;
+imshow(gmag(:,:,20),[])
+
+%calculate center of image to find the outward pointing gradients
+center_of_the_image = [size(ct_data,1)/2 size(ct_data,2)/2 size(ct_data,3)/2];
+
+filename = 'stored_edges.mat';
+myVars = {'stored_indices'};
+S = load(filename,myVars{:});
+stored_indices = S.stored_indices;
+
+%size of edges
+num_edges = size(stored_indices,1);
+
+one_fourth = num_edges*40;
+a = 1;
+b = num_edges;
+rand_edges_indices = randi(b,one_fourth,a);
+second_rand_edges_indices = randi(b,one_fourth,a);
+rand_edges = stored_indices(rand_edges_indices,:);
+second_rand_edges = stored_indices(second_rand_edges_indices,:);
+
+
+%apply hough transform
+%only intersect lines that are 50 degrees apart
+
+centers = [];
+figure;
+slice(ct_data,size(ct_data,1)/2, size(ct_data,2)/2, size(ct_data,3)/2);
+hold on;
+for i= 1:size(rand_edges,1)
+    pt1 = rand_edges(i,:);
+    pt2 = second_rand_edges(i,:);
+    pt1_dir_x = gx(rand_edges(i,1), rand_edges(i,2), rand_edges(i,3));
+    pt1_dir_y = gy(rand_edges(i,1), rand_edges(i,2), rand_edges(i,3));
+    pt1_dir_z = gz(rand_edges(i,1), rand_edges(i,2), rand_edges(i,3));
+    pt2_dir_x = gx(second_rand_edges(i,1), second_rand_edges(i,2), second_rand_edges(i,3));
+    pt2_dir_y = gy(second_rand_edges(i,1), second_rand_edges(i,2), second_rand_edges(i,3));
+    pt2_dir_z = gz(second_rand_edges(i,1), second_rand_edges(i,2), second_rand_edges(i,3));
+    pt1_dir_normed = [pt1_dir_x pt1_dir_y pt1_dir_z]/norm([pt1_dir_x pt1_dir_y pt1_dir_z]);
+    pt2_dir_normed = [pt2_dir_x pt2_dir_y pt2_dir_z]/norm([pt2_dir_x pt2_dir_y pt2_dir_z]);
+    
+    %get the angle between the two lines
+    angle = atan2d(norm(cross(pt1_dir_normed,pt2_dir_normed)), dot(pt1_dir_normed,pt2_dir_normed));
+           
+    end_pt1 = [pt1(1) pt1(2) pt1(3)] + pt1_dir_normed*(100);
+    end_pt2 = [pt2(2) pt2(2) pt2(3)] + pt2_dir_normed*(-120);
+    start_pts = [pt1(1) pt1(2) pt1(3); pt2(1) pt2(2) pt2(3)];
+    end_pts = [end_pt1; end_pt2];
+       
+    if angle > -50 && angle < 50 
+        [point,~] = lineIntersect3D(start_pts,end_pts);
+        if point(3) > 0 && point(3) < size(ct_data,3)
+            if point(2) > 0 && point(2) < size(ct_data,2)
+                if point(1) > 0 && point(1) < size(ct_data,1)
+                    centers = [centers; point(1) point(2) point(3)];
+                end
+            end
+        end
+      
+    end
+    
+end
+centers_first_col = centers(:,1);
+[bins_first_dim, centers_1] = hist(centers_first_col,64);
+%get bin with the highest value
+[bins_sec_dim, centers_2] = hist(centers(:,2),64);
+[bins_third_dim, centers_3] = hist(centers(:,3),64);
+
+%now plot the point
+[~,ind_x] = max(bins_first_dim);
+[~,ind_y] = max(bins_sec_dim);
+[~,ind_z] = max(bins_third_dim);
+
+%plot the middle slices and the point
+figure;
+slice(ct_data,size(ct_data,1)/2, size(ct_data,2)/2, size(ct_data,3)/2);
+
+hold on;
+plot3(centers_2(ind_y),centers_1(ind_x),centers_3(ind_z),'ob','MarkerSize',20,'MarkerFaceColor','b')
+
+
+
+%% try doing the Hough transform in 3D
+
+
+%%
+%{
+lps_pts = [];
+rps_to_lps = [-1 0 0; 0 -1 0; 0 0 1];
+for i =1:size(r)
+    rps_pt = ijk2ras([r(i) c(i) v(i)], ct_metadata);
+    lps_pt = rps_to_lps*rps_pt;
+    lps_pts = [lps_pts; lps_pt'];
+end
+%}    
+    
+
+%for slice 25 -
+%{
+figure;
+slice(ct_data, 256,256,32);
+hold on;
+plot3(rows, cols,v,'og','MarkerSize',3,'MarkerFaceColor','g')
+%}
+
+
+%plot(row_indices_of_edges,col_indices_of_edges,'og','MarkerSize',3,'MarkerFaceColor','g')
+
+%convert to ras coordinates and see if that makes a difference
+%first 5 points
+%{
+pt1 = [row_indices_of_edges(1) col_indices_of_edges(1) 28];
+pt2 = [row_indices_of_edges(2) col_indices_of_edges(2) 28];
+pt3 = [row_indices_of_edges(3) col_indices_of_edges(3) 28];
+pt4 = [row_indices_of_edges(4) col_indices_of_edges(4) 28];
+pt5 = [row_indices_of_edges(5) col_indices_of_edges(5) 28];
+
+ras_pt1 = ijk2ras(pt1, ct_metadata);
+ras_pt2 = ijk2ras(pt2, ct_metadata);
+ras_pt3 = ijk2ras(pt3, ct_metadata);
+ras_pt4 = ijk2ras(pt4, ct_metadata);
+ras_pt5 = ijk2ras(pt5, ct_metadata);
+%}
+
+%{
+figure;
+x_slice = 256;
+y_slice = 256;
+z_slice = 28;
+%ct_double_data = double(ct_data);
+slice(ct_data,x_slice,y_slice,z_slice);
+hold on;
+plot(ras_pt1(1), ras_pt1(2), 'ob','MarkerSize',6,'MarkerFaceColor','b');
+hold on;
+plot(ras_pt2(1), ras_pt2(2), 'ob','MarkerSize',6,'MarkerFaceColor','b');
+hold on;
+plot(ras_pt3(1), ras_pt3(2), 'ob','MarkerSize',6,'MarkerFaceColor','b');
+hold on;
+plot(ras_pt4(1), ras_pt4(2), 'ob','MarkerSize',6,'MarkerFaceColor','b');
+hold on;
+plot(ras_pt5(1), ras_pt5(2), 'ob','MarkerSize',6,'MarkerFaceColor','b');
+%}
+
+
+
+
+
+
+%need to remove the circles around the head
+%first reshape it so we can easily pick out the extreme values
+
+%figure
+
+%montage(X,[]);
+%title("What the CT image looks like")
+%{
+Beginning of the original code
+
+
+%x_to_show = X(:,:,:);
+%imshow(x_to_show)
+%X_squeeze = squeeze(X);
+
+%X_squeeze(:,:,1:18) = [];
+%X_squeeze(:,:,end-5:end) = [];
+size(X_squeeze)
+%put all intensity values in one column to find the max intensity
+X_one_col = reshape(X_squeeze, [size(X_squeeze,1)*size(X_squeeze,2)*size(X_squeeze,3),1]);
+
+%get max intensity value in the image
+max_intensity = max(X_one_col);
+high_intensity_indices = find(abs(X_squeeze) > (max_intensity-40));
+X_squeeze(high_intensity_indices) = 0.00000000001;
+%figure;
+%imt = imtool(X_squeeze(:,:,30));
+
+
+sz = size(X_squeeze);
+[gmag,gaz,gelev] = imgradient3(X_squeeze);
+[gx,gy,gz] = imgradientxyz(X_squeeze);
+
+%reshape the gradients and remove the low gradients
+%first find the range though
+gmag = reshape(gmag,[size(gmag,1)*size(gmag,2)*size(gmag,3) 1]);
+
+
+max_gradient = max(gmag);
+min_gradient = min(gmag);
+%a_third_gradient_range = max_gradient/3;
+indices = find(gmag < max_gradient*0.297);
+gmag = reshape(gmag,sz(1), sz(2), sz(3));
+gmag(indices) = 0.00000000001;
+im = gmag(:,:,3);
+max_level = double(max(im(:)));
+%figure;
+%imt = imtool(im, [0, max_level]);
+
+%figure;
+%montage(reshape(gmag,sz(1),sz(2),1,sz(3)),'DisplayRange',[])
+%title('Gradient magnitude')
+
+%try loading data in a different method
+%using the edge3 method
+%rotated_img = imrotate3(X_squeeze,90,[0 0 1]);
+thresh = 0.7;
+edges_of_image = edge3(X_squeeze,'approxcanny',thresh);
+edges_of_image(:,:,1:24) = 0;
+edges_of_image(:,:,end-8:end) = 0;
+%figure;
+%montage(reshape(edges_of_image,size(X)));
+%title("Edges of objects")
+center_of_the_image = [size(X_squeeze,1)/2 size(X_squeeze,2)/2 size(X_squeeze,3)/2];
+%find bwboundary and plot
+outer_boundaries = zeros(size(edges_of_image,1), size(edges_of_image,2), size(edges_of_image,3));
+%}
+%{
+for k = 1:size(edges_of_image,3)
+    outer_boundary = bwboundaries(edges_of_image(:,:,k));
+    outer_boundaries(:,:,k) = outer_boundary;
+end
+figure;
+montage(reshape(outer_boundaries,size(X)));
+title('bw boundary of objects')
+%}
+
+%This gets you all the indices where there is actually an edge, and the edges on the border 
+%{
+kept_edges = zeros(size(edges_of_image,1), size(edges_of_image,2), size(edges_of_image,3));
+stored_indices = [];
+for i = 1:size(edges_of_image,1)
+    for j = 1:size(edges_of_image,2)
+        for k = 1:size(edges_of_image,3)
+            if edges_of_image(i,j,k) == 1
+                center_to_point = [i j k] - center_of_the_image;
+                norm_center_to_point = center_to_point/norm(center_to_point);
+                norm_grad_vector = [gx(i,j,k) gy(i,j,k) gz(i,j,k)]/norm([gx(i,j,k) gy(i,j,k) gz(i,j,k)]);
+                dot_grad_and_outward_dir = dot(norm_center_to_point, norm_grad_vector);
+                if dot_grad_and_outward_dir > 0
+                    kept_edges(i,j,k) = 1;
+                    stored_indices = [stored_indices; i j k];
+                else
+                    kept_edges(i,j,k) = 0;
+                end
+            end
+        end
+    end
+end
+
+save('kept_edges.mat','kept_edges','stored_indices');
+%}
+%{
+filename = 'kept_edges.mat';
+myVars = {'kept_edges','stored_indices'};
+S = load(filename,myVars{:});
+stored_indices = S.stored_indices;
+kept_edges = S.kept_edges;
+%}
+%disp("I got here 1")
+%figure;
+%montage(reshape(kept_edges,size(X)));
+%title('outward facing edges')
+
+
+%{
+%find a way to plot the centers on the ct slice - using hough transform
+%fitting circles
+%DONE
+
+% go through the kept edges of slice 6 and do like every 3rd point
+
+slice = 6;
+indices = find(stored_indices(:,3) == 6);
+kept_edges_of_slice6 = stored_indices(indices,:);
+kept_edges_of_slice6 = kept_edges_of_slice6(1:40:end,:);
+combos = nchoosek(1:size(kept_edges_of_slice6,1),3);
+centers = [];
+%boxes = zeros(512/16,512/16);
+
+for i= 1:size(combos,1)
+    x1 = kept_edges_of_slice6(combos(i,1),1);
+    y1 = kept_edges_of_slice6(combos(i,1),2);
+    x2 = kept_edges_of_slice6(combos(i,2),1);
+    y2 = kept_edges_of_slice6(combos(i,2),2);
+    x3 = kept_edges_of_slice6(combos(i,3),1);
+    y3 = kept_edges_of_slice6(combos(i,3),2);
+    A = x1*(y2-y3) - y1* (x2-x3) + x2*y3 - x3*y2;
+    B = (x1.^2 + y1.^2)* (y3 - y2) + (x2.^2 + y2.^2)*(y1-y3) + (x3.^2 + y3.^2)*(y2-y1);
+    C = (x1.^2 + y1.^2)*(x2-x3) + (x2.^2 + y2.^2)*(x3-x1) + (x3.^2 + y2.^2)*(x1-x2);
+    D = (x1.^2 + y1.^2)*(x3*y2 - x2*y3) + (x2.^2 + y2.^2)*(x1*y3 - x3*y1) + (x3.^2 + y3.^2)*(x2*y1 - x1*y2);
+    cx = -(B/(2*A));
+    cy = -(C/(2*A));
+    r = sqrt((B.^2 + C.^2 - 4*A*D)/(4*A.^2));
+    
+    if isreal(r) && cx > 0 && cy > 0 && r > 0 && cx < 512 && cy < 512 && r < 512
+        %check which bin the center falls in
+        
+        centers = [centers; cx cy r];
+    end
+end
+
+figure;
+imshow(kept_edges(:,:,6))
+hold on;
+for i=1:size(centers,1)
+    plot(centers(i,1),centers(i,2),'oy','MarkerSize',5,'MarkerFaceColor','y')
+end
+N = hist3(centers(:,1:2), 'Nbins',[16,16]);
+[M,index_col] = max(N);
+[K,index_row] = max(M);
+max_bin_index = [index_col(index_row), index_row];
+sum_of_all = sum(N);
+sum_of_all_ag = sum(sum_of_all);
+figure;
+imshow(kept_edges(:,:,6))
+hold on;
+for i=1:size(centers,1)
+    if centers(i,1) >= max_bin_index(1)*32 && centers(i,1) <= (max_bin_index(1)+1)*32
+        if centers(i,2) >= max_bin_index(2)*32 && centers(i,2) <= (max_bin_index(2)+1)*32
+            
+            plot(centers(i,1),centers(i,2),'oy','MarkerSize',5,'MarkerFaceColor','y')
+
+        end
+    end
+end
+%}
+
+%% Do Hough transform in 2d using intersection of lines
+% only use some edges - will need gradient information to create a line
+% need point (use coordinates of image) and direction to identify a line
+
+%get the gradients for slice 6 
+%{
+slice = X_squeeze(:,:,32);
+sz = size(slice);
+%rotate_xsqueeze = imrotate(slice28,90);
+[gx_1,gy_1] = imgradientxy(slice);
+
+X_one_col = reshape(slice, [size(slice,1)*size(slice,2),1]);
+max_intensity = max(X_one_col);
+high_intensity_indices = find(abs(slice) > (max_intensity-40));
+slice(high_intensity_indices) = 0.00000000001;
+%{
+[gmag,gaz] = imgradient(slice);
+gmag = reshape(gmag,[size(gmag,1)*size(gmag,2) 1]);
+
+max_gradient = max(gmag);
+min_gradient = min(gmag);
+a_third_gradient_range = max_gradient/3;
+indices = find(gmag < max_gradient*0.297);
+gmag = reshape(gmag,sz(1), sz(2));
+gmag(indices) = 0.00000000001;
+%}
+center_of_the_image = [size(slice,1)/2 size(slice,2)/2];
+
+stored_indices = [];
+thresh = 0.7;
+edges_of_image = edge(slice,'approxcanny',thresh);
+[r,c] = ind2sub(size(edges_of_image),find(edges_of_image == 1));
+%rows = c;
+%cols = r;
+%{
+for i = 1:size(edges_of_image,1)
+    for j = 1:size(edges_of_image,2)
+        
+            if edges_of_image(i,j) == 1
+                center_to_point = [i j] - center_of_the_image;
+                norm_center_to_point = center_to_point/norm(center_to_point);
+                norm_grad_vector = [gx_1(i,j) gy_1(i,j)]/norm([gx_1(i,j) gy_1(i,j)]);
+                dot_grad_and_outward_dir = dot(norm_center_to_point, norm_grad_vector);
+                if dot_grad_and_outward_dir > 0
+                    kept_edges(i,j) = 1;
+                    stored_indices = [stored_indices; i j];
+                else
+                    kept_edges(i,j) = 0;
+                end
+            end
+        
+    end
+end
+%}
+stored_indices = [];
+for i = 1:size(r,1)
+    center_to_point = [r(i) c(i)] - center_of_the_image;
+    norm_center_to_point = center_to_point/norm(center_to_point);
+    grad_vector = [gx_1(r(i), c(i)) gy_1(r(i), c(i))];
+    %reversed_grad_vector = [ob_grad_vector(2) ob_grad_vector(1)];
+       
+    norm_grad_vector = grad_vector/norm(grad_vector);
+    dot_grad_and_outward_dir = dot(norm_center_to_point, norm_grad_vector);
+    if dot_grad_and_outward_dir > 0
+        stored_indices = [stored_indices; r(i) c(i)];
+    
+    end
+end
+
+
+figure;
+imshow(edges_of_image)
+%only keep the outward pointing gradients
+%{
+figure;
+imshow(X_squeeze(:,:,28))
+hold on;
+for i = 1:size(edges_of_image,1)
+    for j = 1:size(edges_of_image,2)
+        if edges_of_image(i,j) == 1
+            plot(i,j,'og','MarkerFaceColor','g','MarkerSize',5)
+        end
+    end
+end
+%}
+%redo the whole procedure. 1. get the edges
+
+
+%Commented out for now
+%test on slice 6 - obtain the edges of that slice
+
+%indices = find(stored_indices(:,3) == 6);
+%kept_edges_of_slice6 = stored_indices(indices,:);
+%this determines the sampling - how many edges are we actually going to use
+%to do the calculations
+stored_indices = stored_indices(1:10:end,:);
+%which combination of edges are we going to use to test the lines
+combos = nchoosek(1:size(stored_indices,1),2);
+%our accumulation array
+figure;
+imshow(slice)
+hold on
+centers = [];
+%second line
+st_pts = [];
+end_pts = [];
+for i= 1:size(combos,1)
+    %get the point and direction of the edges
+    x1 = stored_indices(combos(i,1),1);
+    y1 = stored_indices(combos(i,1),2);
+    x2 = stored_indices(combos(i,2),1);
+    y2 = stored_indices(combos(i,2),2);
+    %get the direction of the gradient
+    
+    pt1_dir_x = gx_1(stored_indices(combos(i,1),1),stored_indices(combos(i,1),2));
+    pt1_dir_y = gy_1(stored_indices(combos(i,1),1),stored_indices(combos(i,1),2));
+    pt2_dir_x = gx_1(stored_indices(combos(i,2),1), stored_indices(combos(i,2),2));
+    pt2_dir_y = gy_1(stored_indices(combos(i,2),1), stored_indices(combos(i,2),2));
+    pt1_dir_normed = [pt1_dir_y pt1_dir_x]/norm([pt1_dir_y pt1_dir_x]);
+    pt2_dir_normed = [pt2_dir_y pt2_dir_x]/norm([pt2_dir_y pt2_dir_x]);
+    st_pts1 = [x1 y1] + pt1_dir_normed*-50;
+    st_pts2 = [x2 y2] + pt2_dir_normed*-50;
+    st_pts = [st_pts; st_pts2];
+    end_pts_1 = [x1 y1] + pt1_dir_normed*35;
+    end_pts_2 = [x2 y2] + pt2_dir_normed*35;
+    end_pts = [end_pts; end_pts_2];
+    %angle = atan2d(norm(cross(pt1_dir_normed,pt2_dir_normed)), dot(pt1_dir_normed,pt2_dir_normed));
+    cosTheta = dot(pt1_dir_normed,pt2_dir_normed) ./ (norm(pt1_dir_normed) * norm(pt2_dir_normed));
+    cosTheta = rad2deg(cosTheta);
+    
+    if cosTheta> -50 && cosTheta < 50
+        plot([st_pts2(1) end_pts_2(1)], [st_pts2(2) end_pts_2(2)],'-r','LineWidth',2)
+        point = intersectLines([x1 y1 pt1_dir_normed], [x2 y2 pt2_dir_normed]);
+        centers = [centers; point(1) point(2)];
+    end
+    
+    %point = intersectLines([x1 y1 pt1_dir_normed], [x2 y2 pt2_dir_normed]);
+    %centers = [centers; point(1) point(2)];
+end
+
+%{
+N = hist3(centers(:,1:2), 'Nbins',[32,32]);
+[M,index_col] = max(N);
+[K,index_row] = max(M);
+max_bin_index = [index_col(index_row), index_row];
+sum_of_all = sum(N);
+sum_of_all_ag = sum(sum_of_all);
+figure;
+imshow(slice)
+hold on;
+for i=1:size(centers,1)
+    if centers(i,1) >= max_bin_index(1)*16 && centers(i,1) <= (max_bin_index(1)+1)*16
+        if centers(i,2) >= max_bin_index(2)*16 && centers(i,2) <= (max_bin_index(2)+1)*16
+            disp("Im getting here")
+            plot(centers(i,1),centers(i,2),'oy','MarkerSize',5,'MarkerFaceColor','y')
+            
+        end
+    end
+end
+%}
+[bins_first_dim,centers_1] = hist(centers(:,1),64);
+%get bin with the highest value
+[bins_sec_dim, centers_2] = hist(centers(:,2),64);
+%bins_third_dim = hist(centers(:,3),32);
+
+%now plot the point
+[~,ind_x] = max(bins_first_dim);
+[~,ind_y] = max(bins_sec_dim);
+%[~,ind_z] = max(bins_third_dim);
+x_min = (ind_x)*(size(ct_data,1)/64);
+x_max = (ind_x+1)*(size(ct_data,1)/64);
+x_coord = (x_min+x_max)/2;
+y_min = (ind_y)*(size(ct_data,2)/64);
+y_max = (ind_y+1)*(size(ct_data,2)/64);
+y_coord = (y_min+y_max)/2;
+hold on;
+plot(centers_1(ind_x), centers_2(ind_y), 'ob','MarkerSize',5,'MarkerFaceColor','g')
+hold on;
+for i = 1:size(stored_indices,1)
+    plot(stored_indices(i,1), stored_indices(i,2), 'og','MarkerSize',5,'MarkerFaceColor','g')
+end
+%z_min = (ind_z)*(size(ct_data,3)/32);
+%z_max = (ind_z+1)*(size(ct_data,3)/32);
+%z_coord = (z_min+z_max)/2;
+%{
+hold on;
+x1 = stored_indices(combos(1,1),1);
+y1 = stored_indices(combos(1,1),2);
+x2 = stored_indices(combos(1,2),1);
+y2 = stored_indices(combos(1,2),2);
+pt1_dir_x = gx_1(stored_indices(combos(1,1),1),stored_indices(combos(1,1),2));
+pt1_dir_y = gy_1(stored_indices(combos(1,1),1),stored_indices(combos(1,1),2));
+pt2_dir_x = gx_1(stored_indices(combos(1,2),1), stored_indices(combos(1,2),2));
+pt2_dir_y = gy_1(stored_indices(combos(1,2),1), stored_indices(combos(1,2),2));
+x1_1 = x1 + pt1_dir_x*15;
+y1_1 = y1 + pt1_dir_y*15;
+x2_1 = x2 + pt2_dir_x*15;
+y2_1 = y2 + pt2_dir_y*15;
+plot([x1 x1_1], [y1 y1_1], '-y');
+hold on;
+plot([x2 x2_1], [y2 y2_1], '-y');
+hold on;
+plot(x1,y1,'og','MarkerSize',5,'MarkerFaceColor','g')
+hold on;
+plot(x2,y2,'og','MarkerSize',5,'MarkerFaceColor','g')
+hold on;
+for i = 1:size(stored_indices,1)
+    plot(stored_indices(i,1), stored_indices(i,2), 'og','MarkerSize',5,'MarkerFaceColor','g')
+end
+%}
+%this works but you need to get rid of the edges in the center
+
+%}
+%% Do Hough Transform using intersection of lines for 3D
+
+%{
+figure;
+imshow(X_squeeze(:,:,28))
+%plot the edges for the slice
+indices = find(stored_indices(:,3) == 28);
+kept_edges_of_slice28 = stored_indices(indices,:);
+hold on
+for i = 1:size(kept_edges_of_slice28,1)
+    plot(kept_edges_of_slice28(i,2), kept_edges_of_slice28(i,1),'og','MarkerSize',5,'MarkerFaceColor','g')
+end
+
+stored_indices = stored_indices(1:400:end,:,:);
+combos = nchoosek(1:size(stored_indices,1),2);
+
+centers = [];
+figure;
+slice(X_squeeze,256, 256, 32);
+hold on
+count = 1;
+lines1= [];
+lines2 = [];
+for i= 1:size(combos,1)
+    x1 = stored_indices(combos(i,1),1);
+    y1 = stored_indices(combos(i,1),2);
+    z1 = stored_indices(combos(i,1),3);
+    x2 = stored_indices(combos(i,2),1);
+    y2 = stored_indices(combos(i,2),2);
+    z2 = stored_indices(combos(i,2),3);
+    pt1_dir_x = gx(stored_indices(combos(i,1),1),stored_indices(combos(i,1),2), stored_indices(combos(i,1),3));
+    pt1_dir_y = gy(stored_indices(combos(i,1),1),stored_indices(combos(i,1),2), stored_indices(combos(i,1),3));
+    pt1_dir_z = gz(stored_indices(combos(i,1),1),stored_indices(combos(i,1),2), stored_indices(combos(i,1),3));
+    pt2_dir_x = gx(stored_indices(combos(i,2),1), stored_indices(combos(i,2),2), stored_indices(combos(i,2),3));
+    pt2_dir_y = gy(stored_indices(combos(i,2),1), stored_indices(combos(i,2),2), stored_indices(combos(i,2),3));
+    pt2_dir_z = gz(stored_indices(combos(i,2),1), stored_indices(combos(i,2),2), stored_indices(combos(i,2),3));
+    pt1_dir_normed = [pt1_dir_x pt1_dir_y pt1_dir_z]/norm([pt1_dir_x pt1_dir_y pt1_dir_z]);
+    pt2_dir_normed = [pt2_dir_x pt2_dir_y pt2_dir_z]/norm([pt2_dir_x pt2_dir_y pt2_dir_z]);
+    end_pt1 = [x1 y1 z1] + pt1_dir_normed*(100);
+    end_pt2 = [x2 y2 z2] + pt2_dir_normed*(-120);
+    start_pts = [x1 y1 z1; x2 y2 z2];
+    end_pts = [end_pt1; end_pt2];
+    count = count + 1;
+    lines1 = [lines1; x1 y1 z1 pt1_dir_normed];
+    lines2 = [lines2; x2 y2 z2 pt2_dir_normed];
+    
+    
+    plot3([x1 end_pt1(1)],[y1 end_pt1(2)], [z1 end_pt1(3)],'-g','LineWidth',3)
+    hold on;
+    plot3([x2 end_pt2(2)],[y2 end_pt2(2)], [z2 end_pt2(3)],'-r','LineWidth',3)
+       
+  
+    
+    [point,~] = lineIntersect3D(start_pts,end_pts);
+    if point(1) > 0 && point(2) > 0 && point(3) >0
+        centers = [centers; point(1) point(2) point(3)];
+    end
+end
+figure;
+slice(X_squeeze,256, 256, 32);
+hold on
+plot3(centers(1:10,1), centers(1:10,2), centers(1:10,3),'og','MarkerSize',5,'MarkerFaceColor','g')
+
+
+%for i = 1:size(centers,3)
+%N = hist3(centers(:,1:2,i), 'Nbins',[16,16]);
+%implement the binning yourself
+%min_in_first_dim = min(centers(:,1));
+%max_in_first_dim = max(centers(:,1));
+%min_in_sec_dim = min(centers(:,2));
+%max_in_sec_dim = max(centers(:,2));
+%min_in_third_dim = min(centers(:,3));
+%max_in_third_dim = max(centers(:,3));
+%edges1 = linspace(min_in_first_dim, max_in_first_dim, 16);
+%edges2 = linspace(min_in_sec_dim, max_in_sec_dim, 16);
+%edges3 = linspace(min_in_third_dim, max_in_third_dim, 16);
+
+%{
+i = 1;
+x1 = stored_indices(combos(i,1),1);
+y1 = stored_indices(combos(i,1),2);
+z1 = stored_indices(combos(i,1),3);
+x2 = stored_indices(combos(i,2),1);
+y2 = stored_indices(combos(i,2),2);
+z2 = stored_indices(combos(i,2),3);
+pt1_dir_x = gx(stored_indices(combos(i,1),1),stored_indices(combos(i,1),2), stored_indices(combos(i,1),3));
+pt1_dir_y = gy(stored_indices(combos(i,1),1),stored_indices(combos(i,1),2), stored_indices(combos(i,1),3));
+pt1_dir_z = gz(stored_indices(combos(i,1),1),stored_indices(combos(i,1),2), stored_indices(combos(i,1),3));
+pt2_dir_x = gx(stored_indices(combos(i,2),1), stored_indices(combos(i,2),2), stored_indices(combos(i,2),3));
+pt2_dir_y = gy(stored_indices(combos(i,2),1), stored_indices(combos(i,2),2), stored_indices(combos(i,2),3));
+pt2_dir_z = gz(stored_indices(combos(i,2),1), stored_indices(combos(i,2),2), stored_indices(combos(i,2),3));
+pt1_dir_normed = [pt1_dir_x pt1_dir_y pt1_dir_z]/norm([pt1_dir_x pt1_dir_y pt1_dir_z]);
+pt2_dir_normed = [pt2_dir_x pt2_dir_y pt2_dir_z]/norm([pt2_dir_x pt2_dir_y pt2_dir_z]);
+end_pt1 = [x1 y1 z1] + pt1_dir_normed*100;
+end_pt2 = [x2 y2 z2] + pt2_dir_normed*100;
+
+start_pts = [x1 y1 z1; x2 y2 z2];
+end_pts = [end_pt1; end_pt2];
+[point,~] = lineIntersect3D(start_pts,end_pts);
+figure;
+plot3([x1 end_pt1(1)], [y1 end_pt1(2)], [z1 end_pt1(3)],'-g','LineWidth',5)
+hold on;
+plot3([x2 end_pt2(1)], [y2 end_pt2(2)], [z2 end_pt2(3)],'-g','LineWidth',5);
+hold on;
+plot3(point(1), point(2), point(3),'ob','MarkerSize',5,'MarkerFaceColor','b');
+%}
+
+bins_first_dim = hist(centers(:,1),32);
+%get bin with the highest value
+bins_sec_dim = hist(centers(:,2),32);
+bins_third_dim = hist(centers(:,3),32);
+[~,ind_x] = max(bins_first_dim);
+[~,ind_y] = max(bins_sec_dim);
+[~,ind_z] = max(bins_third_dim);
+x_min = (ind_x-1)*16;
+x_max = ind_x*16;
+x_coord = (x_min+x_max)/2;
+y_min = (ind_y-1)*16;
+y_max = ind_y*16;
+y_coord = (y_min+y_max)/2;
+z_min = (ind_z-1)*2;
+z_max = (ind_z)*2;
+z_coord = (z_min+z_max)/2;
+
+%plot the middle slices and the point
+figure;
+slice(X_squeeze,256, 256, 32);
+hold on;
+plot3(x_coord,y_coord,z_coord,'ob','MarkerSize',20,'MarkerFaceColor','b')
+
+%}
+

@@ -1,0 +1,388 @@
+
+clear 
+close all
+%% import the scene elements
+
+
+addpath Patient1-4181
+%head
+
+
+[skull_v, skull_f] = stlReadver2("skull_one_layer-patient1.stl");
+%lateral ventricle
+[lateral_v, lateral_f] = stlReadver2("lateral_ventricle-patient1.stl");
+%midline
+[midline_v, midline_f] = stlReadver2("midline-patient1.stl");
+
+%motor and sensory cortex
+[motor_v, motor_f] = stlReadver2("sensory_motor_cortex-patient1.stl");
+%sensory cortex
+
+%coronal suture 
+%[coronal_v, coronal_f] = stlReadver2("coronal_suture.stl");
+
+[skull_f,skull_v] = reducepatch(skull_f,skull_v,5000);
+
+deg_angle = -30;
+rot_matrix = [1 0 0; 0 cosd(deg_angle) -sind(deg_angle); 0 sind(deg_angle) cosd(deg_angle)];
+
+skull_v = rot_matrix*skull_v';
+skull_v = skull_v';
+
+lateral_v = rot_matrix*lateral_v';
+lateral_v = lateral_v';
+
+midline_v = rot_matrix*midline_v';
+midline_v = midline_v';
+
+motor_v = rot_matrix*motor_v';
+motor_v = motor_v';
+
+
+%coronal_v = rot_matrix*coronal_v';
+%coronal_v = coronal_v';
+%% draw out the scene to make sure there are no missing pieces
+skull_tri = triangulation(skull_f, skull_v);
+lateral_tri = triangulation(lateral_f, lateral_v);
+midline_tri = triangulation(midline_f, midline_v);
+motor_tri = triangulation(motor_f, motor_v);
+
+
+%% get sphere for skull part - method 3
+
+[center,radius] = sphereFit1(skull_v);
+[x,y,z] = sphere();
+%figure;
+%surf(radius*x+center(1), radius*y+center(2), radius*z+center(3));
+%title("sphere fit least squared");
+%hold on;
+%trisurf(skull_tri)
+
+
+skull_tri = triangulation(skull_f,skull_v);
+%replot
+%figure;
+%s = surf(x,y,z);
+%title("points rotated 30 degrees")
+%hold on;
+%trisurf(skull_tri)
+
+% get the face information for the sphere
+%patch_sphere = surf2patch(s);
+
+
+
+%% plotting the parts of the segmented brain
+%figure;
+%trisurf(skull_tri,'FaceColor','g')
+%hold on
+%trisurf(lateral_tri,'FaceColor','r')
+%hold on
+%trisurf(midline_tri, 'FaceColor','c')
+%hold on
+%trisurf(artery_tri, 'FaceColor', 'm')
+%hold on
+%trisurf(motor_tri, 'FaceColor', 'b')
+%hold on
+%trisurf(sensory_tri, 'FaceColor','y') 
+
+
+%% go through the faces list and compute the normals for each face, have a running total for each vertex
+%for now - assume vertex normal sum is the average of the previous vertex
+%sum and the newest one found
+%the skip value is changed here
+[intersecting_face_centers, intersecting_lines, intersecting_faces] = get_intersecting_lines(skull_tri,1,lateral_v,lateral_f,skull_f);
+   
+
+%% Find intersecting lines that don't touch S.A.Rs
+
+% need to find the triangles in which this happens - and label them.
+
+% start by creating a wireframe representation of the skull - plot3 every
+% edge in the mesh
+[not_at_risk_intersecting_lines, not_at_risk_intersecting_faces, not_at_risk_intersecting_face_centers, first_pts] = get_not_at_risk_intersecting_lines(intersecting_face_centers, intersecting_lines, intersecting_faces, midline_v,midline_f,lateral_v,lateral_f, motor_v, motor_f,skull_tri);
+
+
+%% plot the points of intersection on the sphere
+%[sphere_points] = plot_points_of_intersection_on_sphere(not_at_risk_intersecting_lines,not_at_risk_intersecting_face_centers,center,radius,first_pts,x,y,z);
+
+
+%% create the longitude latitude bins to sort the intersections into.
+%[max_density,min_density,avg_density] = get_sphere_loc_for_intersections(sphere_points, radius, center, not_at_risk_intersecting_face_centers, skull_tri, x, y, z);
+
+%% plot the head as a heat map
+% first find the number of intersections associated with each vertex of the
+% head
+idx = rangesearch(not_at_risk_intersecting_faces,not_at_risk_intersecting_faces(1,:),1/pi);
+maxSoFar = 0;
+color_at_vertex = [];
+for i = 1:size(skull_f,1)
+    %the last number in the rangesearch function is the max distance between
+    %the current vertex and the closest point of intersecton
+    idx = rangesearch(not_at_risk_intersecting_face_centers,skull_v(skull_f(i,1),:),10);
+    idx1 = rangesearch(not_at_risk_intersecting_face_centers, skull_v(skull_f(i,2),:),10);
+    idx2 = rangesearch(not_at_risk_intersecting_face_centers, skull_v(skull_f(i,3),:),10);
+    
+        
+    avg_length_idx = (length(idx{1}) + length(idx1{1}) + length(idx2{1}))/3;
+    color_at_vertex = [color_at_vertex; avg_length_idx];
+    
+end
+
+%color_at_vertex is the C vertex of the patch object.
+%create patch object out of the skull
+skull_tri_color = triangulation(skull_f,skull_v);
+%{
+%code to visual where the coronal suture is
+coronal_tri = triangulation(coronal_f, coronal_v);
+coronal_head_stacked = vertcat(coronal_v, skull_v);
+coronal_head_update = skull_f + max(max(coronal_f));
+coronal_head_faces = vertcat(coronal_f, coronal_head_update);
+%trisurf(coronal_tri,'FaceColor','r')
+coronal_color_vals = zeros(size(coronal_f,1),1);
+%color_data = [coronal_color_vals; color_at_vertex];
+color_data = color_at_vertex;
+coronal_and_head_tri = triangulation(coronal_head_faces, coronal_head_stacked);
+%}
+color_data = color_at_vertex;
+kept_faces = [];
+max_num_intersections = max(color_at_vertex);
+for i = 1:size(color_at_vertex)
+    if color_at_vertex(i) <= max_num_intersections && color_at_vertex(i) > 0.5*(max_num_intersections)
+        %keep the index
+        kept_faces = [kept_faces; skull_f(i,:)];
+    end
+end
+% try triangulating
+kept_tri = triangulation(kept_faces,skull_v);
+% try plotting the triangulation
+
+
+%get the lines which intersect with this skull surface
+interest_region_lines = [];
+interest_region_faces = [];
+interest_region_face_centers = [];
+for i = 1:size(not_at_risk_intersecting_lines,1)
+    skull_intersection = intersectLineMesh3d([not_at_risk_intersecting_face_centers(i,:) not_at_risk_intersecting_lines(i,:)], skull_v, kept_faces);
+    if ~isempty(skull_intersection)
+        interest_region_lines = [interest_region_lines; not_at_risk_intersecting_lines(i,:)];
+        interest_region_faces = [interest_region_faces; not_at_risk_intersecting_faces(i,:)];
+        interest_region_face_centers = [interest_region_face_centers; not_at_risk_intersecting_face_centers(i,:)];
+    end
+end
+figure;
+trisurf(kept_tri)
+hold on;
+%plot the intersecting lines
+for i = 1:size(interest_region_lines,1)
+    plot3(interest_region_face_centers(i,1), interest_region_face_centers(i,2), interest_region_face_centers(i,3),'ob','MarkerSize',3,'MarkerFaceColor','b')
+end
+%{
+plotting with the coronal suture
+hF = figure;
+haxes = axes;
+colormap(haxes,'jet')
+skull_plot = trisurf(skull_tri_color,'CData',color_at_vertex);
+set(skull_plot,'FaceColor','interp','EdgeColor','interp');
+cbp = colorbar(haxes, 'Location','east');
+
+haxes2 = axes;
+axis(haxes2,'off');
+colormap(haxes2,'cool');
+coronal_plot = trisurf(coronal_tri);
+Link = linkprop([haxes, haxes2],{'CameraUpVector', 'CameraPosition', 'CameraTarget', 'XLim', 'YLim', 'ZLim'});
+setappdata(gcf, 'StoreTheLink', Link);
+%linkaxes([ax1 ax2]);
+%trisurf(coronal_tri);
+
+%figure;
+%trisurf(coronal_and_head_tri, 'CData',color_data);
+%colorbar
+%}
+figure;
+trisurf(skull_tri_color,'CData',color_data);
+colorbar
+
+% put the coronal suture concatenated with the rest
+%skull_patch = patch('Faces',skull_f, 'Vertices',skull_v,'EdgeColor','none','LineStyle','none');
+%p.FaceColor = 'interp';
+%colorbar
+
+%% find the faces that have an intersection and get all the triangles attached to it 
+%so using all the vertices of the intersected triangle  - run vertex
+%attachment and put all the triangles in a new struct - follow the method
+%used in the bone flap project
+
+region_of_interest_vertices = zeros(size(skull_v,1),3);
+region_of_interest_faces = [];
+skull_struct = struct('Points', skull_tri.Points, 'ConnectivityList', skull_tri.ConnectivityList);
+
+%start with the first point - get the attachments and plot them
+%attached_triangles = vertexAttachments(skull_tri, not_at_risk_intersecting_faces(1,1));
+%figure;
+%trisurf(skull_tri)
+%hold on;
+%plot3(skull_v(not_at_risk_intersecting_faces(1,1),1), skull_v(not_at_risk_intersecting_faces(1,1),2), skull_v(not_at_risk_intersecting_faces(1,1),3),'om','MarkerSize',10,'MarkerFaceColor','m')
+%hold on;
+%plot the 3 edges of the first attached triangle
+%plot3([skull_v(skull_f(attached_triangles{1}(1),1),1) skull_v(skull_f(attached_triangles{1}(1),2),1)], [skull_v(skull_f(attached_triangles{1}(1),1),2) skull_v(skull_f(attached_triangles{1}(1),2),2)],[skull_v(skull_f(attached_triangles{1}(1),1),3) skull_v(skull_f(attached_triangles{1}(1),2),3)],'-m');
+%attached triangles is an index into the face list, not the vertex list
+for i = 1:size(not_at_risk_intersecting_faces,1)
+    %skull_tri = triangulation(skull_struct.ConnectivityList,skull_struct.Points);
+    %skull_struct = struct('Points',skull_tri.Points, 'ConnectivityList', skull_tri.ConnectivityList);
+    attached_triangles = vertexAttachments(skull_tri,not_at_risk_intersecting_faces(i,:)');
+    region_of_interest_vertices(not_at_risk_intersecting_faces(i,1),:) = skull_struct.Points(not_at_risk_intersecting_faces(i,1),:);
+    region_of_interest_vertices(not_at_risk_intersecting_faces(i,2),:) = skull_struct.Points(not_at_risk_intersecting_faces(i,2),:);
+    region_of_interest_vertices(not_at_risk_intersecting_faces(i,3),:) = skull_struct.Points(not_at_risk_intersecting_faces(i,3),:);
+    for j = 1:length(attached_triangles{1})
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{1}(j),1),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{1}(j),1),:);
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{1}(j),2),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{1}(j),2),:);
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{1}(j),3),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{1}(j),3),:);
+    end
+    for k = 1:length(attached_triangles{2})
+        %attached_triangles{2}(k)
+        %region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{2}(k),1),:);
+        %skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{2}(k),1),:);
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{2}(k),1),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{2}(k),1),:);
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{2}(k),2),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{2}(k),2),:);
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{2}(k),3),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{2}(k),3),:);
+    end
+    for l = 1:length(attached_triangles{3})
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{3}(l),1),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{3}(l),1),:);
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{3}(l),2),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{3}(l),2),:);
+        region_of_interest_vertices(skull_struct.ConnectivityList(attached_triangles{3}(l),3),:) = skull_struct.Points(skull_struct.ConnectivityList(attached_triangles{3}(l),3),:);
+    end
+    region_of_interest_faces = [region_of_interest_faces; not_at_risk_intersecting_faces(i,:)];    
+    region_of_interest_faces = [region_of_interest_faces; skull_struct.ConnectivityList(attached_triangles{1}(1:end),:)];
+    region_of_interest_faces = [region_of_interest_faces; skull_struct.ConnectivityList(attached_triangles{2}(1:end),:)];
+    region_of_interest_faces = [region_of_interest_faces; skull_struct.ConnectivityList(attached_triangles{3}(1:end),:)];
+    %skull_struct.ConnectivityList(attached_triangles{1}(:),:) = [];
+    %skull_struct.ConnectivityList(attached_triangles{2}(:),:) = [];
+    %skull_struct.ConnectivityList(attached_triangles{3}(:),:) = [];
+
+end
+
+region_of_interest_faces = unique(region_of_interest_faces,'rows');
+
+
+region_of_interest_tri = triangulation(region_of_interest_faces, region_of_interest_vertices);
+
+figure;
+trisurf(region_of_interest_tri)
+title("Region of high success rate triangulation")
+
+
+%% get the number of successful intersections divided by the number of triangles
+total_succes_region_of_interest = size(not_at_risk_intersecting_faces,1)/size(region_of_interest_faces,1)
+
+%% find average triangle area
+%{
+face_areas = [];
+for i = 1:size(region_of_interest_faces,1)
+    face_areas = [face_areas; triangleArea3d(region_of_interest_vertices(region_of_interest_faces(i,1),:), region_of_interest_vertices(region_of_interest_faces(i,2),:), region_of_interest_vertices(region_of_interest_faces(i,3),:))];
+end
+min_area = min(face_areas);
+max_area = max(face_areas);
+avg_area = mean(face_areas);
+%% skew the normals by deg_angle
+new_face_centers = [];
+new_normals = [];
+deg_angle = 5;
+for i = 1:size(intersecting_lines,1)
+    %normalize the intersecting normal lines
+    intersecting_lines_normed = intersecting_lines(i,:)/norm(intersecting_lines(i,:));
+    line1_axis = skull_v(intersecting_faces(i,1),:) - skull_v(intersecting_faces(i,2),:);
+    line1_axis_normed = line1_axis/norm(line1_axis);
+    new_intersecting_line = rotVecAroundArbAxis(intersecting_lines_normed, line1_axis_normed,deg_angle);
+    new_normals = [new_normals; new_intersecting_line];
+    new_face_centers = [new_face_centers; intersecting_face_centers(i,:)];
+    
+    line2_axis = skull_v(intersecting_faces(i,1),:) - skull_v(intersecting_faces(i,3),:);
+    line2_axis_normed = line2_axis/norm(line2_axis);
+    new_intersecting_line = rotVecAroundArbAxis(intersecting_lines_normed, line2_axis_normed,deg_angle);
+    new_normals = [new_normals; new_intersecting_line];
+    new_face_centers = [new_face_centers; intersecting_face_centers(i,:)];
+    
+    line3_axis = skull_v(intersecting_faces(i,2),:) - skull_v(intersecting_faces(i,3),:);
+    line3_axis_normed = line3_axis/norm(line3_axis);
+    new_intersecting_line = rotVecAroundArbAxis(intersecting_lines_normed, line3_axis_normed,deg_angle);
+    new_normals = [new_normals; new_intersecting_line];
+    new_face_centers = [new_face_centers; intersecting_face_centers(i,:)];
+end
+
+
+%% check how many of the skewed normals now intersect the lateral ventricle
+
+intersecting_skewed_normals = [];
+
+intersecting_skewed_face_centers = [];
+%figure;
+%pcshow(lateral_v)
+%hold on;
+%trisurf(skull_tri)
+%title("Skull cap and intersecting skewed normals MR")
+%hold on;
+
+%this now checks the skewed normals to see if they intersect the lateral
+%ventricle
+for i = 1:size(new_normals,1)
+    
+    ventricle_intersection = intersectLineMesh3d([new_face_centers(i,:) new_normals(i,:)], lateral_v, lateral_f);
+    if ~isempty(ventricle_intersection)
+        
+        intersecting_skewed_normals = [intersecting_skewed_normals; new_normals(i,:)];
+        intersecting_skewed_face_centers = [intersecting_skewed_face_centers; new_face_centers(i,:)];
+        new_normal_normed = new_normals(i,:)/norm(new_normals(i,:));
+        first_pt = new_normal_normed*20 + new_face_centers(i,:);
+        second_pt = new_normal_normed*-150 + new_face_centers(i,:);
+        
+        %plot3([second_pt(1) first_pt(1)], [second_pt(2) first_pt(2)], [second_pt(3) first_pt(3)],'-r')
+        %hold on
+        %plot3(ventricle_intersection(:,1), ventricle_intersection(:,2), ventricle_intersection(:,3),'or','MarkerSize',5,'MarkerFaceColor','m')
+        
+    end
+    
+    
+end
+
+
+num_skewed_lines = size(new_normals)
+num_intersecting_skewed_lines = size(intersecting_skewed_normals)
+
+%figure;
+%trisurf(lateral_tri,'FaceColor','r')
+%hold on;
+%trisurf(skull_tri,'FaceColor','g')
+%title("Skull cap and intersecting skewed normals not intersecting s.a.r's MR")
+%hold on;
+%trisurf(midline_tri,'FaceColor','c')
+%hold on;
+%trisurf(artery_tri,'FaceColor','m')
+%hold on;
+%trisurf(motor_tri,'FaceColor','b')
+%hold on;
+%trisurf(sensory_tri,'FaceColor','y')
+%hold on;
+not_at_risk_intersecting_skewed_lines = [];
+not_at_risk_intersecting_face_centers = [];
+count_skewed_intersecting_not_at_risk = 0;
+for i = 1:size(intersecting_skewed_normals,1)
+    %artery_intersection = intersectLineMesh3d([intersecting_skewed_face_centers(i,:), intersecting_skewed_normals(i,:)],artery_v, artery_f);
+    midline_intersection = intersectLineMesh3d([intersecting_skewed_face_centers(i,:), intersecting_skewed_normals(i,:)], midline_v, midline_f);
+    motor_intersection = intersectLineMesh3d([intersecting_skewed_face_centers(i,:), intersecting_skewed_normals(i,:)], motor_v, motor_f);
+    %sensory_intersection = intersectLineMesh3d([intersecting_skewed_face_centers(i,:), intersecting_skewed_normals(i,:)], sensory_v, sensory_f);
+    if isempty(midline_intersection) && isempty(motor_intersection) %%&& isempty(sensory_intersection)
+        not_at_risk_intersecting_skewed_lines = [not_at_risk_intersecting_skewed_lines; intersecting_skewed_normals(i,:)];
+        face_normal_normed = intersecting_skewed_normals(i,:)/norm(intersecting_skewed_normals(i,:));
+        first_pt = face_normal_normed*(20) + intersecting_skewed_face_centers(i,:);
+        second_pt = face_normal_normed*(-150) + intersecting_skewed_face_centers(i,:);       
+        %plot3([first_pt(1) second_pt(1)], [first_pt(2) second_pt(2)], [first_pt(3) second_pt(3)],'-r')
+        %hold on;
+        %plot3(ventricle_intersection(:,1), ventricle_intersection(:,2), ventricle_intersection(:,3),'or','MarkerFaceColor','m','MarkerSize',5)
+        count_skewed_intersecting_not_at_risk = count_skewed_intersecting_not_at_risk + 1;
+    end
+end
+hold on;
+
+count_skewed_intersecting_not_at_risk  
+%}
